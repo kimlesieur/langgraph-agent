@@ -1,5 +1,6 @@
 import os
 import asyncio
+import argparse
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -8,30 +9,29 @@ from langgraph.prebuilt import create_react_agent
 # Load variables from .env file
 load_dotenv()
 
-async def main():
+async def main(feature_description: str, project_path: str):
     # --- CONFIGURATION ---
-    # Use a real path on your Mac. '.' refers to the current directory.
-    PROJECT_PATH = os.path.abspath("./react-native-parallax") 
-    
-    if not os.path.exists(PROJECT_PATH):
-        print(f"❌ Error: Path {PROJECT_PATH} does not exist.")
+    if not os.path.exists(project_path):
+        print(f"❌ Error: Path {project_path} does not exist.")
         return
 
-    source_dir = "src" if os.path.isdir(os.path.join(PROJECT_PATH, "src")) else "app"
-    source_dir_path = os.path.join(PROJECT_PATH, source_dir)
+    source_dir = "src" if os.path.isdir(os.path.join(project_path, "src")) else "app"
+    source_dir_path = os.path.join(project_path, source_dir)
 
-    print(f"📂 Indexing project at: {PROJECT_PATH}")
+    print(f"📂 Indexing project at: {project_path}")
 
-    # --- MCP CONFIGURATION (Fixed for v0.1.0+) ---
+    # --- MCP CONFIGURATION ---
     # Each server entry MUST have a "transport" key.
     client = MultiServerMCPClient({
         "local_files": {
-            "transport": "stdio",  # <--- THIS WAS MISSING
+            "transport": "stdio",
             "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-filesystem", PROJECT_PATH]
+            "args": ["-y", "@modelcontextprotocol/server-filesystem", project_path]
         }
     })
-    
+
+    last_assistant_text = ""
+
     try:
         print("🔗 Connecting to MCP Filesystem Server...")
         mcp_tools = await client.get_tools()
@@ -39,12 +39,30 @@ async def main():
 
         model = ChatOpenAI(model="gpt-4o", temperature=0)
 
+        rn_examples_path = os.path.join(project_path, "rn-code-examples")
+        plan_path = os.path.join(project_path, "FEATURE_PLAN.md")
+
         system_msg = (
-            "You are a Senior React Native Architect. "
-            "Explore the codebase using your tools to understand the architecture. "
-            f"You can only access files under this MCP root directory: {PROJECT_PATH}. "
-            "Always use full paths under that root when calling tools. "
-            "Always output a structured plan in a file named FEATURE_PLAN.md."
+            "You are a Senior React Native Architect.\n"
+            f"You can only access files under this MCP root directory: {project_path}. "
+            "Always use full absolute paths when calling tools.\n\n"
+            "Your tasks:\n"
+            "1. Explore the project structure: read package.json, list the source directory "
+            f"({source_dir_path}), and inspect key screens, components, navigation, state, "
+            "and API patterns.\n"
+            f"2. Use the rn-code-examples folder at {rn_examples_path} as a reference for "
+            "patterns and snippets; you may reuse or adapt examples from there in the plan.\n"
+            "3. Produce a structured implementation plan for the requested feature, aligned "
+            "with the existing codebase patterns.\n"
+            "4. Include code examples (snippets) consistent with the codebase and/or drawn "
+            "from rn-code-examples.\n"
+            f"5. Write the final plan to {plan_path} using your write_file tool.\n\n"
+            "The FEATURE_PLAN.md must follow this structure:\n"
+            "- **Overview**: brief description of the feature and its purpose.\n"
+            "- **Implementation Steps**: numbered, ordered list of steps.\n"
+            "- **Files to Create/Modify**: list each file with a short description.\n"
+            "- **Code Examples**: relevant snippets in markdown code blocks.\n"
+            "- **Notes / Dependencies**: any libraries to install, caveats, or follow-ups."
         )
 
         # Create the Graph
@@ -52,14 +70,15 @@ async def main():
 
         # User Request
         query = (
-            f"Read '{PROJECT_PATH}/package.json' to see dependencies, then list files in "
-            f"'{source_dir_path}'."
+            f"Analyze this React Native project and create an implementation plan with code "
+            f"examples for: {feature_description}. "
+            f"Write the final plan to {plan_path} in the project root using your write tool."
         )
-        
+
         print("🚀 Architect is analyzing your local files...\n")
-        
+
         inputs = {"messages": [("user", query)]}
-        
+
         async for chunk in agent.astream(inputs, stream_mode="values"):
             message = chunk["messages"][-1]
             content = getattr(message, "content", None)
@@ -82,13 +101,46 @@ async def main():
 
             if text:
                 print(f"\n[Architect]: {text}")
-                    
+                # Track the last non-empty AI message for the fallback write
+                if message.__class__.__name__ == "AIMessage":
+                    last_assistant_text = text
+
+        # --- FALLBACK: write FEATURE_PLAN.md if the agent skipped the write tool ---
+        if not os.path.exists(plan_path) and last_assistant_text:
+            print(f"\n📝 Agent did not write the file; saving last response to {plan_path}")
+            with open(plan_path, "w", encoding="utf-8") as f:
+                f.write(last_assistant_text)
+            print(f"✅ FEATURE_PLAN.md written to {plan_path}")
+
     finally:
-        # In a real app, you'd close the client here
-        pass
+        # Tear down MCP server connections and subprocesses.
+        # MultiServerMCPClient supports the async context manager protocol;
+        # if used outside of `async with`, call aclose() when available.
+        if hasattr(client, "aclose"):
+            await client.aclose()
+        # else: no explicit close API in this version; resources are released
+        # when the event loop exits.
+
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Architect Agent: generate a React Native feature implementation plan."
+    )
+    parser.add_argument(
+        "feature",
+        help="Description of the feature to implement (e.g. 'dark mode toggle').",
+    )
+    parser.add_argument(
+        "--project",
+        default="project-example",
+        help="Path to the React Native project (default: project-example).",
+    )
+    args = parser.parse_args()
+
+    feature_description = args.feature
+    project_path = os.path.abspath(args.project)
+
     try:
-        asyncio.run(main())
+        asyncio.run(main(feature_description, project_path))
     except KeyboardInterrupt:
         print("\n👋 Architect agent stopped.")
