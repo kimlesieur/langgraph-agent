@@ -4,7 +4,7 @@ import argparse
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain_mcp_adapters.client import MultiServerMCPClient
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
 
 # Load variables from .env file
 load_dotenv()
@@ -40,39 +40,61 @@ async def main(feature_description: str, project_path: str):
         model = ChatOpenAI(model="gpt-4o", temperature=0)
 
         rn_examples_path = os.path.join(project_path, "rn-code-examples")
+        has_rn_examples = os.path.isdir(rn_examples_path)
         plan_path = os.path.join(project_path, "FEATURE_PLAN.md")
+
+        tasks = [
+            f"Explore the project structure: read package.json, list the source directory "
+            f"({source_dir_path}), and inspect key screens, components, navigation, state, "
+            "and API patterns.",
+            "Produce a structured implementation plan for the requested feature, aligned "
+            "with the existing codebase patterns.",
+            "Include code examples (snippets) consistent with the codebase.",
+            f"Write the final plan to {plan_path} using your write_file tool.",
+        ]
+        if has_rn_examples:
+            tasks.insert(
+                1,
+                f"Use the rn-code-examples folder at {rn_examples_path} as a reference for "
+                "patterns and snippets; prefer reusing or adapting examples from there and "
+                "cite each in the **Snippet sources** section as \"rn-code-examples/<path>\".",
+            )
+        tasks_text = "\n".join(f"{i+1}. {t}" for i, t in enumerate(tasks))
 
         system_msg = (
             "You are a Senior React Native Architect.\n"
             f"You can only access files under this MCP root directory: {project_path}. "
-            "Always use full absolute paths when calling tools.\n\n"
+            "Always use full absolute paths when calling tools.\n"
+            "Expo Router uses route groups with parentheses (e.g. (tabs)); use the exact path "
+            "as returned by list_directory (e.g. app/(tabs), not app/tabs).\n"
+            "Only list or read paths that exist; do not assume optional folders (e.g. rn-code-examples) exist.\n\n"
             "Your tasks:\n"
-            "1. Explore the project structure: read package.json, list the source directory "
-            f"({source_dir_path}), and inspect key screens, components, navigation, state, "
-            "and API patterns.\n"
-            f"2. Use the rn-code-examples folder at {rn_examples_path} as a reference for "
-            "patterns and snippets; you may reuse or adapt examples from there in the plan.\n"
-            "3. Produce a structured implementation plan for the requested feature, aligned "
-            "with the existing codebase patterns.\n"
-            "4. Include code examples (snippets) consistent with the codebase and/or drawn "
-            "from rn-code-examples.\n"
-            f"5. Write the final plan to {plan_path} using your write_file tool.\n\n"
+            f"{tasks_text}\n\n"
             "The FEATURE_PLAN.md must follow this structure:\n"
             "- **Overview**: brief description of the feature and its purpose.\n"
             "- **Implementation Steps**: numbered, ordered list of steps.\n"
             "- **Files to Create/Modify**: list each file with a short description.\n"
-            "- **Code Examples**: relevant snippets in markdown code blocks.\n"
+            "- **Code Examples**: relevant snippets in markdown code blocks. For each snippet, "
+            "add a short line above or below the block indicating its origin (see below).\n"
+            "- **Snippet sources**: a dedicated section listing the origin of every code snippet "
+            "used in the plan. For each snippet, give either:\n"
+            "  - \"rn-code-examples/<path>\": when the snippet is taken or adapted from the "
+            "rn-code-examples folder (e.g. rn-code-examples/theme/useColorScheme.ts);\n"
+            "  - \"<project path>\": when from the project itself (e.g. app/(tabs)/_layout.tsx).\n"
+            "This section ensures traceability and confirms when reference examples are used.\n"
             "- **Notes / Dependencies**: any libraries to install, caveats, or follow-ups."
         )
 
         # Create the Graph
-        agent = create_react_agent(model, mcp_tools, prompt=system_msg)
+        agent = create_agent(model, mcp_tools, system_prompt=system_msg)
 
         # User Request
         query = (
             f"Analyze this React Native project and create an implementation plan with code "
             f"examples for: {feature_description}. "
-            f"Write the final plan to {plan_path} in the project root using your write tool."
+            f"Write the final plan to {plan_path} in the project root using your write tool. "
+            "Include the **Snippet sources** section listing the origin of every snippet "
+            "(rn-code-examples/<path> or project path)."
         )
 
         print("🚀 Architect is analyzing your local files...\n")
