@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+*.pyz
+*.pywz
+*.pyzz
+*.pywzz
+*.pyzzz
+*.pywzzz
+*.pyzzzz
+
+# React Native Examples Projects
+react-native-parallax/
+
+# Node
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+
+# ENV
+.env
