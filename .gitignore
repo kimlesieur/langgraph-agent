@@ -13,7 +13,6 @@ __pycache__/
 *.pyzzzz
 
 # React Native Examples Projects
-react-native-parallax/
 
 # Node
 node_modules/
